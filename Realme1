@@ -1,0 +1,105 @@
+""" Rainfall Pattern Time Series Analysis Dataset: rainfall_data.csv Expected columns: date, rainfall_mm Install dependencies: pip install pandas numpy matplotlib Run: python rainfall_analysis.py """
+
+from pathlib import Path
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+DATA_FILE = Path(__file__).with_name("rainfall_data.csv")
+OUTPUT_DIR = Path(__file__).with_name("outputs")
+OUTPUT_DIR.mkdir(exist_ok=True)
+
+
+def load_data(path: Path) -> pd.DataFrame:
+    """Load, validate, and prepare monthly rainfall observations."""
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Dataset not found: {path}. Keep rainfall_data.csv beside this script."
+        )
+
+    df = pd.read_csv(path)
+    required = {"date", "rainfall_mm"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"CSV is missing required columns: {sorted(missing)}")
+
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df["rainfall_mm"] = pd.to_numeric(df["rainfall_mm"], errors="coerce")
+    df = df.dropna(subset=["date", "rainfall_mm"]).copy()
+
+    if df.empty:
+        raise ValueError("No valid rainfall records were found.")
+    if (df["rainfall_mm"] < 0).any():
+        raise ValueError("Rainfall values cannot be negative.")
+
+    # If a month occurs more than once, combine its observations.
+    df = (
+        df.set_index("date")
+        .sort_index()["rainfall_mm"]
+        .resample("MS")
+        .sum(min_count=1)
+        .dropna()
+        .to_frame()
+    )
+    return df
+
+
+def analyze(df: pd.DataFrame) -> None:
+    """Print summaries and save useful time-series charts."""
+    monthly = df["rainfall_mm"]
+    monthly_mean = monthly.mean()
+    yearly = monthly.resample("YS").sum()
+    month_names = monthly.groupby(monthly.index.month).mean()
+    rolling_mean = monthly.rolling(window=3, min_periods=1).mean()
+
+    print("\n=== Rainfall Time Series Summary ===")
+    print(f"Period: {monthly.index.min():%Y-%m} to {monthly.index.max():%Y-%m}")
+    print(f"Months analyzed: {monthly.size}")
+    print(f"Total rainfall: {monthly.sum():,.1f} mm")
+    print(f"Average monthly rainfall: {monthly_mean:,.1f} mm")
+    print(f"Wettest month: {monthly.idxmax():%B %Y} ({monthly.max():,.1f} mm)")
+    print(f"Driest month: {monthly.idxmin():%B %Y} ({monthly.min():,.1f} mm)")
+    print("\nAnnual rainfall (mm):")
+    print(yearly.rename(index=lambda d: d.year).round(1).to_string())
+
+    # Trend estimate in mm/month using a straight-line fit.
+    x = np.arange(monthly.size)
+    slope, intercept = np.polyfit(x, monthly.to_numpy(), 1)
+    print(f"Linear trend: {slope:.2f} mm/month (descriptive, not causal)")
+
+    # Chart 1: monthly rainfall and 3-month moving average.
+    fig, ax = plt.subplots(figsize=(11, 5))
+    ax.plot(monthly.index, monthly, label="Monthly rainfall", linewidth=1.4)
+    ax.plot(rolling_mean.index, rolling_mean, label="3-month moving average", linewidth=2)
+    ax.set(title="Monthly Rainfall Pattern", xlabel="Date", ylabel="Rainfall (mm)")
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(OUTPUT_DIR / "monthly_rainfall_trend.png", dpi=160)
+    plt.close(fig)
+
+    # Chart 2: average rainfall for each calendar month.
+    fig, ax = plt.subplots(figsize=(9, 5))
+    month_names.index = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+    ]
+    month_names.plot(kind="bar", ax=ax)
+    ax.set(title="Average Rainfall by Calendar Month", xlabel="Month", ylabel="Average rainfall (mm)")
+    ax.grid(axis="y", alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(OUTPUT_DIR / "seasonal_rainfall_pattern.png", dpi=160)
+    plt.close(fig)
+
+    # Save annual totals for later reporting.
+    yearly.rename("annual_rainfall_mm").to_csv(OUTPUT_DIR / "annual_rainfall_summary.csv", header=True)
+    print(f"\nCharts and summary saved in: {OUTPUT_DIR}")
+
+
+def main() -> None:
+    rainfall = load_data(DATA_FILE)
+    analyze(rainfall)
+
+
+if __name__ == "__main__":
+    main()
